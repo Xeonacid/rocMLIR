@@ -369,8 +369,9 @@ boolean shouldRunFromChip(String chip) {
         case "gfx908":
             return params.disable908 == false && shouldRunFromCodepath("mfma")
         case "gfx942":
-        case "gfx950":
             return params.disable942 == false && shouldRunFromCodepath("mfma")
+        case "gfx950":
+            return params.disable950 == false && shouldRunFromCodepath("mfma")
         case "gfx1030":
             return shouldRunFromCodepath("navi21")
         case "gfx1100":
@@ -502,6 +503,8 @@ pipeline {
                      description: 'Disable testing on gfx908')
         booleanParam(name: 'disable942', defaultValue: false,
                      description: 'Disable testing on gfx942')
+        booleanParam(name: 'disable950', defaultValue: false,
+                     description: 'Disable testing on gfx950')
 
         // option only to be used with upstream merges
         booleanParam(name: 'ignoreExternalLinting', defaultValue: false,
