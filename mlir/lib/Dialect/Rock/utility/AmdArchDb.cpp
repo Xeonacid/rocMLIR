@@ -74,6 +74,8 @@ AmdArchInfo mlir::rock::lookupArchInfo(StringRef arch) {
   StringRef minor = chip.take_back(2);
   StringRef major = chip.slice(0, chip.size() - 2);
   if (major == "gfx9") {
+    // TODO (gfx950): some of those information are not accurate and need to be adjusted
+    // after hardware release
     return llvm::StringSwitch<AmdArchInfo>(minor)
         .Case("08", cdnaInfo)
         .Case("0a", cdna2Info)

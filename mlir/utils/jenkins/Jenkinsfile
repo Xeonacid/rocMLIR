@@ -177,7 +177,7 @@ void setHeartbeat() {
 String getLabelFromCodepath(String codepath) {
     echo "codepath is ${codepath}"
     if (codepath == "mfma") {
-        label = 'mlir && (gfx942 || gfx908 || gfx90a)'
+        label = 'mlir && (gfx950 || gfx942 || gfx908 || gfx90a)'
     } else if (codepath == "navi21") {
         // For non-performance related testing, use both workstations (gfx1030w)
         // and server nodes (gfx1030)
@@ -206,6 +206,8 @@ String getLabelFromChip(String chip) {
             return "mlir && gfx90a"
         case "gfx942":
             return "mlir && gfx942"
+        case "gfx950":
+            return "mlir && gfx950"
         case "gfx1030":
             // For [Tune MLIR Kernels] and [Performance report] stages,
             // fix the vm-5 workstation for testing
@@ -367,6 +369,7 @@ boolean shouldRunFromChip(String chip) {
         case "gfx908":
             return params.disable908 == false && shouldRunFromCodepath("mfma")
         case "gfx942":
+        case "gfx950":
             return params.disable942 == false && shouldRunFromCodepath("mfma")
         case "gfx1030":
             return shouldRunFromCodepath("navi21")
