@@ -2493,10 +2493,10 @@ static func::FuncOp createCpuGemmKernelWithMlir(ModuleOp module,
 }
 
 static Value transposeMatrix(OpBuilder &builder, Location loc, Value src,
-                             ArrayRef<int64_t> perm) {
+                             ArrayRef<int32_t> perm) {
   auto elemType = cast<RankedTensorType>(src.getType()).getElementType();
   auto permutationAttr = DenseIntElementsAttr::get(
-      RankedTensorType::get({(int64_t)perm.size()}, builder.getI64Type()),
+      RankedTensorType::get({(int64_t)perm.size()}, builder.getI32Type()),
       perm);
   Value permutationValue =
       builder.create<arith::ConstantOp>(loc, permutationAttr);
@@ -2899,6 +2899,7 @@ void insertPrefills(func::FuncOp fut) {
     Location loc = launchOp->getLoc();
     DenseMap<int, Attribute> argInitValues;
     StringRef callee = launchOp.getCallee();
+    OpBuilder builder(launchOp);
     for (ModuleOp module : innerModules) {
       if (func::FuncOp calleeFunc = module.lookupSymbol<func::FuncOp>(callee)) {
         size_t argCount = calleeFunc.getArguments().size();
@@ -2906,12 +2907,27 @@ void insertPrefills(func::FuncOp fut) {
           if (Attribute initAttr =
                   calleeFunc.getArgAttr(i, rock::PrefillAttr::getMnemonic())) {
             argInitValues[i] = initAttr;
+          } else if (!argInitValues.contains(i) &&
+                     calleeFunc.getArgAttr(i, "mhal.write_access")) {
+            // initialize to 100 by default
+            // This ensures failure if the output tensor requires prefill,
+            // helping to detect uninitialized output in GPU vs CPU execution.
+            auto type = calleeFunc.getArgumentTypes()[i];
+            auto elementType = cast<MemRefType>(type).getElementType();
+            Attribute init;
+            if (llvm::isa<FloatType>(elementType)) {
+              init = builder.getFloatAttr(elementType, 100.0);
+            } else {
+              assert(llvm::isa<IntegerType>(elementType) &&
+                     "expecting `int` element type");
+              init = builder.getIntegerAttr(elementType, 100);
+            }
+            argInitValues[i] = init;
           }
         }
       }
     }
     {
-      OpBuilder builder(launchOp);
       OpBuilder::InsertionGuard guard(builder);
       for (auto argIdxAndValueAttr : argInitValues) {
         int argIdx = argIdxAndValueAttr.first;
@@ -3473,8 +3489,7 @@ static void generateKernel(MLIRContext *context, GenParams &genParams,
 
     if (wmmaFeature == FeatureToggle::infer) {
       // Disable acceleration for mixed types
-      if (filterElemType.getIntOrFloatBitWidth() !=
-          inputElemType.getIntOrFloatBitWidth()) {
+      if (filterElemType != inputElemType) {
         enabledFeatures =
             bitEnumClear(enabledFeatures, rock::GemmFeatures::wmma);
       }
@@ -3648,10 +3663,10 @@ static void populateCloneHarnessLogic(ModuleOp module) {
   StringAttr archAttr = b.getStringAttr(arch);
   if (originalFunc->hasAttr("arch"))
     originalFunc->setAttr("arch", archAttr);
-  auto readAttr =
-      b.getNamedAttr(func::FuncOp::getReadAccessAttrName(), b.getUnitAttr());
-  auto writeAttr =
-      b.getNamedAttr(func::FuncOp::getWriteAccessAttrName(), b.getUnitAttr());
+  auto readAttr = b.getNamedAttr(mhal::MHALDialect::getReadAccessAttrName(),
+                                 b.getUnitAttr());
+  auto writeAttr = b.getNamedAttr(mhal::MHALDialect::getWriteAccessAttrName(),
+                                  b.getUnitAttr());
   for (size_t index = 0; index < originalFunc.getArguments().size(); index++)
     originalFunc.setArgAttrs(index, readAttr);
   for (size_t index = 0; index < originalFunc.getNumResults(); index++)

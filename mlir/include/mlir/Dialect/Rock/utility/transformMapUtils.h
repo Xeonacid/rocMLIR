@@ -247,11 +247,47 @@ Value addPassThroughIndices(OpBuilder &b, Value transformed,
 
 ArrayRef<int64_t> getLowerShape(ArrayAttr transformStack);
 
+// Given a sequence of transform maps, this will remove the specified upper
+// dimensions. This is usually used to obtain intra-tile indexing in the
+// resultant tile where the remaining upper dims correspond to.
+// NOTE: if there is padding involved in a dimension that is partially
+// being removed, that padding will be ignored in the sub tile indexing
+// maps because the sub tile is assumed to fully materialized filled
+// padded data.
 FailureOr<ArrayAttr> removeUpperDims(OpBuilder &b, ArrayAttr transformAttrs,
                                      SetVector<int64_t> removeIndicesSet);
 
+// Given a sequence of transform maps, this will remove the specified upper
+// dimensions. This is usually used to obtain intra-tile indexing in the
+// resultant tile where the remaining upper dims correspond to.
+// NOTE: if there is padding involved in a dimension that is partially
+// being removed, that padding will be ignored in the sub tile indexing
+// maps because the sub tile is assumed to fully materialized filled
+// padded data.
 FailureOr<ArrayAttr> removeUpperDims(OpBuilder &b, ArrayAttr transformAttrs,
                                      const StringSet<> &removeDimNamesSet);
+
+struct SubDimInfo {
+  int64_t size;
+  int64_t stride;
+};
+
+inline raw_ostream &operator<<(raw_ostream &os, const SubDimInfo &sdInfo) {
+  os << "<size: " << sdInfo.size << ",stride=" << sdInfo.stride << ">";
+  return os;
+}
+
+// Given a sequence of transform maps, this will obtain the lower sub-dimensions
+// each provided upper dim would map to.
+FailureOr<llvm::SmallDenseMap<int64_t, SmallVector<SubDimInfo>>>
+getLowerSubDimensions(OpBuilder &b, ArrayAttr transformAttrs, int64_t dim);
+FailureOr<llvm::SmallDenseMap<int64_t, SmallVector<SubDimInfo>>>
+getLowerSubDimensions(OpBuilder &b, ArrayAttr transformAttrs,
+                      ArrayRef<int64_t> dims);
+
+SmallVector<SmallString<8>> createDimNames(int64_t len, StringRef prefix);
+SmallVector<StringRef> getStringRefsFor(ArrayRef<SmallString<8>> strings);
+
 } // end namespace rock
 } // end namespace mlir
 #endif

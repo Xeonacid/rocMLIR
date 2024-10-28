@@ -55,6 +55,9 @@ void createAttnTuningRangeBF(TuningParamSet *newSpace, AttentionOp attnOp,
   } else if (bitEnumContainsAny(features, GemmFeatures::wmma)) {
     isWMMA = true;
     validRangeAttnParams = validRangeAttnParamsWMMA;
+  } else {
+    // We only support GPUs with matrix accelerator extentions
+    return;
   }
   OpBuilder b(attnOp.getContext());
   for (uint32_t gemm0MPerBlock : validRangeAttnParams[0]) {
@@ -361,7 +364,8 @@ void createQuickTuningRange(TuningParamSet *newSpace,
              tuningInfo.getTuningParameters(info.kernelType, info.gemmAType,
                                             info.gemmBType, info.arch),
              info.gemmSize)) {
-      if (succeeded(tuningInfo.paramsProbablyValid(b, info, param)))
+      if (succeeded(tuningInfo.paramsProbablyValid(b, info, param)) &&
+          succeeded(tuningInfo.couldBePerformant(info, param)))
         newSpace->tuningRange.push_back(cast<RockTuningParamAttrInterface>(
             tuningInfo.getGemmParamsAttr(b, param)));
     }
@@ -372,7 +376,8 @@ void createQuickTuningRange(TuningParamSet *newSpace,
              tuningInfo.getTuningParameters(info.kernelType, info.gemmAType,
                                             info.gemmBType, info.arch),
              info.gemmSize)) {
-      if (succeeded(tuningInfo.paramsProbablyValid(b, info, param)))
+      if (succeeded(tuningInfo.paramsProbablyValid(b, info, param)) &&
+          succeeded(tuningInfo.couldBePerformant(info, param)))
         newSpace->tuningRange.push_back(cast<RockTuningParamAttrInterface>(
             tuningInfo.getGemmParamsAttr(b, param)));
     }
@@ -383,7 +388,8 @@ void createQuickTuningRange(TuningParamSet *newSpace,
              tuningInfo.getTuningParameters(info.kernelType, info.gemmAType,
                                             info.gemmBType),
              info.gemmSize)) {
-      if (succeeded(tuningInfo.paramsProbablyValid(b, info, param)))
+      if (succeeded(tuningInfo.paramsProbablyValid(b, info, param)) &&
+          succeeded(tuningInfo.couldBePerformant(info, param)))
         newSpace->tuningRange.push_back(cast<RockTuningParamAttrInterface>(
             tuningInfo.getGemmParamsAttr(b, param)));
     }
