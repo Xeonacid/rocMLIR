@@ -426,18 +426,8 @@ FailureOr<RegsAsMatrixSubTiles> mlir::rock::getPackedRegsAsTileViews(
     toGlobalIdx.ignore(otherBlockDim);
     TransformMapAttr toGlobalIdxAttr = toGlobalIdx.get();
 
-    if (padK == 0) {
-      gpuViews.gridSubTile = b.getArrayAttr(
-          {splitIdAttr, padkThreadsLastIterAttr, toGlobalIdxAttr});
-    } else {
-      auto padder = TopDownTMBuilder::below(toGlobalIdx, toGlobalIdxAttr);
-      padder.passThrough({"g"}, {0}, {"g"});
-      padder.passThrough({dName}, {2}, {dName});
-      padder.pad("k", "k", 0, padK);
-      gpuViews.gridSubTile =
-          b.getArrayAttr({splitIdAttr, padkThreadsLastIterAttr, toGlobalIdxAttr,
-                          padder.get()});
-    }
+    gpuViews.gridSubTile =
+        b.getArrayAttr({splitIdAttr, padkThreadsLastIterAttr, toGlobalIdxAttr});
   }
   {
     StringSet<> dimensionsToRemove{"k_loop", bidGridOrder[0], bidGridOrder[1],
