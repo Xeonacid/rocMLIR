@@ -9,6 +9,7 @@
 #ifndef ROCK_UTILITY_LOWERINGUTILS_H
 #define ROCK_UTILITY_LOWERINGUTILS_H
 
+#include "mlir/Analysis/BufferDependencyAnalysis.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Rock/IR/RockTypes.h"
@@ -200,6 +201,14 @@ TypedValue<MemRefType> viewBufferAs(OpBuilder &b, Value buffer, Type type);
 // helper to allocate memory on the GPU
 Value gpuAlloc(OpBuilder &b, Location loc, int64_t bufferDim, Type elementType,
                gpu::AddressSpace memoryAddressSpace);
+
+// helper to verify a lds allocation fits in the GPU
+LogicalResult checkLDSSize(StringAttr arch, int64_t ldsBytes);
+
+// Trace gemm output back to its function arguments
+FailureOr<SmallVector<BlockArgument>>
+traceGemmOutputToArgs(Value matC, func::FuncOp func, OpBuilder &builder,
+                      const BufferDependencyAnalysis &deps);
 
 } // end namespace rock
 } // end namespace mlir

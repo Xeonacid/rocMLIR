@@ -22,6 +22,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
 
+#include "llvm/Support/Debug.h"
 using namespace mlir;
 using namespace mlir::rock;
 
@@ -573,6 +574,23 @@ FailureOr<memref::AllocOp> mlir::rock::findMemrefAlloc(Value value) {
   return findAlloc<memref::AllocOp>(value);
 }
 
+FailureOr<BlockArgument> findBlockArgument(Value value) {
+  auto maybeBlockArg = dyn_cast_or_null<BlockArgument>(value);
+  while (!maybeBlockArg) {
+    // Keep going until the operation that defines the value is a
+    // view-like operation
+    if (auto viewOp =
+            dyn_cast_or_null<ViewLikeOpInterface>(value.getDefiningOp())) {
+      value = viewOp.getViewSource();
+    } else {
+      return failure();
+    }
+    maybeBlockArg = dyn_cast_or_null<BlockArgument>(value);
+  }
+
+  return maybeBlockArg;
+}
+
 std::optional<int64_t> mlir::rock::computeConstDiff(Value l, Value u) {
   IntegerAttr clb, cub;
   if (matchPattern(l, m_Constant(&clb)) && matchPattern(u, m_Constant(&cub))) {
@@ -774,4 +792,79 @@ Value mlir::rock::gpuAlloc(OpBuilder &b, Location loc, int64_t bufferDim,
   auto buffer = b.create<GpuAllocOp>(loc, rawMemType);
 
   return viewBufferAs(b, buffer, elementType);
+}
+
+LogicalResult mlir::rock::checkLDSSize(StringAttr arch, int64_t ldsBytes) {
+  // Check for arch limitations exceede
+  const int64_t ldsSize = rock::lookupArchInfo(arch).maxSharedMemPerWG;
+  return success(ldsBytes <= ldsSize);
+}
+
+// Trace an arg back to its alloc.
+static void traceGemmAllocToArgs(memref::AllocOp buffer,
+                                 const BufferDependencyAnalysis &deps,
+                                 SmallVector<BlockArgument> &args) {
+  IRRewriter rewriter(buffer.getContext());
+  std::optional<llvm::SmallVector<OpOperand *>> readersOperands =
+      deps.getReaders(buffer);
+  if (!readersOperands.has_value())
+    return;
+  for (OpOperand *readerOperand : readersOperands.value()) {
+    auto readOp = dyn_cast<MemoryEffectOpInterface>(readerOperand->getOwner());
+    if (!readOp)
+      continue;
+
+    SmallVector<MemoryEffects::EffectInstance> effects;
+    readOp.getEffects(effects);
+    for (const MemoryEffects::EffectInstance &effect : effects) {
+      OpOperand *writerOperand = effect.getEffectValue<OpOperand *>();
+      // Test against the write operand to guard against [MemRead, MemWrite]
+      if (writerOperand && readerOperand != writerOperand &&
+          isa<MemoryEffects::Write>(effect.getEffect())) {
+        Value writerOperandValue = writerOperand->get();
+        if (auto blockArg = dyn_cast<BlockArgument>(writerOperandValue))
+          args.push_back(blockArg);
+        else if (memref::AllocOp writeBuffer = dyn_cast<memref::AllocOp>(
+                     writerOperandValue.getDefiningOp()))
+          traceGemmAllocToArgs(writeBuffer, deps, args);
+      }
+    }
+  }
+}
+
+FailureOr<SmallVector<BlockArgument>>
+mlir::rock::traceGemmOutputToArgs(Value matC, func::FuncOp func,
+                                  OpBuilder &builder,
+                                  const BufferDependencyAnalysis &deps) {
+  if (func.getNumArguments() == 0)
+    return failure();
+
+  SmallVector<BlockArgument> args;
+  auto funcArgs = func.getArguments();
+  // check if matC is a kernel argument
+  for (auto arg : funcArgs) {
+    if (findBlockArgument(matC) == arg)
+      args.push_back(arg);
+  }
+  assert(args.empty() || args.size() == 1);
+  if (!args.empty())
+    return args;
+
+  // trace matC to its alloc
+  FailureOr<memref::AllocOp> allocOp = findMemrefAlloc(matC);
+  if (failed(allocOp))
+    return failure();
+
+  // trace gemm alloc to arg
+  traceGemmAllocToArgs(allocOp.value(), deps, args);
+  for (auto arg : args) {
+    bool containsArg =
+        std::find(funcArgs.begin(), funcArgs.end(), arg) != funcArgs.end();
+    assert(containsArg &&
+           "Found BlockArgument does not belong to func.getArguments()");
+  }
+  if (!args.empty())
+    return args;
+
+  return failure();
 }
