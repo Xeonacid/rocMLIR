@@ -186,6 +186,8 @@ String getLabelFromCodepath(String codepath) {
         label = 'mlir'
     } else if (codepath == "navi3x") {
         label = 'mlir && gfx1101'
+    } else if (codepath == "navi4x") {
+        label = 'mlir && ( gfx1200 || gfx1201 )'
     } else {
         echo "${codepath} is not supported"
         label = 'wrongLabel'
@@ -212,6 +214,10 @@ String getLabelFromChip(String chip) {
             return "mlir && gfx1100"
         case "gfx1101":
             return "mlir && gfx1101"
+        case "gfx1200":
+            return "mlir && gfx1200"
+        case "gfx1201":
+            return "mlir && gfx1201"
     }
 }
 
@@ -257,7 +263,6 @@ void checkRocmlirOnNavi3x(boolean fixed, String testSuite) {
              -DCMAKE_EXPORT_COMPILE_COMMANDS=1
      """)
 }
-
 
 void check_RockE2ETests_Navi3x(boolean fixed) {
 
@@ -343,6 +348,11 @@ boolean shouldRunFromCodepath(String codepath) {
     if (params.canXdlops && (params.disableNavi3x == false) && (codepath == "navi3x")) {
         return true
     }
+    // Run navi4x on private nightly CI only  
+    if (params.canXdlops && (params.disableNavi4x == false) && (codepath == "navi4x") &&  
+        params.nightly) {  
+        return true;  
+    }  
     return false
 }
 
@@ -363,6 +373,9 @@ boolean shouldRunFromChip(String chip) {
         case "gfx1100":
         case "gfx1101":
             return shouldRunFromCodepath("navi3x")
+        case "gfx1200":
+        case "gfx1201":
+            return shouldRunFromCodepath("navi4x")
     }
 }
 
@@ -384,7 +397,7 @@ void archivePerfDB() {
 }
 
 boolean shouldRunBuildAndTest(String codepath) {
-    // When default codepath is selected, we test mfma, navi21 and navi3x on
+    // When default codepath is selected, we test mfma, navi21, navi3x and navi4x on
     // private CI and vanilla on public CI
     if (params.codepath == "default" && shouldRunFromCodepath(codepath))
         return true
@@ -396,12 +409,40 @@ boolean shouldRunBuildAndTest(String codepath) {
         if (params.codepath == "vanilla") return true
         if (params.codepath == "navi21" && params.disableNavi21 == false) return true
         if (params.codepath == "navi3x" && params.disableNavi3x == false) return true
+        if (params.codepath == "navi4x" && params.disableNavi4x == false) return true
         return false
     }
 }
 
 boolean isNotNavi3x(String chip) {
     return "${CHIP}" != 'gfx1100' && "${CHIP}" != 'gfx1101'
+}
+
+void collectCoverageData(String profdata, String cov, String cpath) {
+    sh """
+       rm -f *.profraw
+       # Arbitrarily 150 GB;  we typically see 125 GB of *.profraw.
+       if [ `df --output=avail -k . | tail -1l` -lt 153600000 ]; then
+          echo Not enough free disk space for profiling.
+          exit 1
+       fi
+       ninja check-rocmlir
+       # Profile processing.
+       ${profdata} merge -sparse ./*.profraw -o ./coverage.profdata
+       rm -f build/*.profraw
+       ${cov} report --object ./bin/rocmlir-opt --object ./bin/rocmlir-driver      \
+          --object ./bin/rocmlir-gen --instr-profile ./coverage.profdata           \
+          --ignore-filename-regex=external/llvm-project > ./coverage_${cpath}.report
+       cat ./coverage_${cpath}.report
+       ${cov} export --object ./bin/rocmlir-opt --object ./bin/rocmlir-driver      \
+          --object ./bin/rocmlir-gen --instr-profile ./coverage.profdata           \
+          --ignore-filename-regex=external/llvm-project --format=lcov              \
+          --compilation-dir ${WORKSPACE} > ./coverage_${cpath}.lcov
+       ${cov} show --object ./bin/rocmlir-opt --object ./bin/rocmlir-driver        \
+          --object ./bin/rocmlir-gen --instr-profile ./coverage.profdata           \
+          --ignore-filename-regex=external/llvm-project -Xdemangler=llvm-cxxfilt   \
+          --format=html > ./coverage_${cpath}.html
+       """
 }
 
 
@@ -441,7 +482,7 @@ pipeline {
 
         // choose the codepath for testing
         choice(name: 'codepath',
-               choices: ['default', 'mfma', 'navi21', 'navi3x', 'vanilla'],
+               choices: ['default', 'mfma', 'navi21', 'navi3x', 'navi4x', 'vanilla'],
                description: 'Choose the codepath to test')
         // option to disable navi21 cells in case nodes are offline
         booleanParam(name: 'disableNavi21', defaultValue: true,
@@ -449,7 +490,9 @@ pipeline {
         // option to disable navi3x cells in case nodes are offline
         booleanParam(name: 'disableNavi3x', defaultValue: false,
                      description: 'Disable testing on Navi3x')
-
+        // option to disable navi4x cells in case nodes are offline
+        booleanParam(name: 'disableNavi4x', defaultValue: false,
+                     description: 'Disable testing on Navi4x')
         booleanParam(name: 'disable90a', defaultValue: false,
                      description: 'Disable testing on gfx90a')
         booleanParam(name: 'disable908', defaultValue: false,
@@ -491,7 +534,7 @@ pipeline {
                 axes {
                     axis {
                         name 'CODEPATH'
-                        values 'vanilla', 'mfma', 'navi21', 'navi3x'
+                        values 'vanilla', 'mfma', 'navi21', 'navi3x', 'navi4x'
                     }
                 }
                 agent {
@@ -1127,46 +1170,33 @@ pipeline {
                     stage ("body") {
                         steps {
                             // Build with profiling on, and just code-generation tests.
-                            catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE',
-                                       message: 'Code coverage stage had an error or timeout.') {
-                                timeout(time: 60, activity: true, unit: 'MINUTES') {
-                                    sh 'rm -f build/CMakeCache.txt'
-                                    sh 'rm -f build/*.profraw'
-                                    buildProject('check-rocmlir-build-only',
-                                                 '-DBUILD_FAT_LIBROCKCOMPILER=ON -DCMAKE_BUILD_TYPE=debug -DLLVM_BUILD_INSTRUMENTED_COVERAGE=ON')
-                                    dir ('build') {
-                                        // Run tests.
-                                        sh """
-                                           ninja check-rocmlir
-                                           # Profile processing.
-                                           ${LLVM_PROFDATA} merge -sparse ./*.profraw -o ./coverage.profdata
-                                           rm -f build/*.profraw
-                                           ${LLVM_COV} report --object ./bin/rocmlir-opt --object ./bin/rocmlir-driver \
-                                              --object ./bin/rocmlir-gen --instr-profile ./coverage.profdata           \
-                                              --ignore-filename-regex=external/llvm-project > ./coverage_${CPATH}.report
-                                           cat ./coverage_${CPATH}.report
-                                           ${LLVM_COV} export --object ./bin/rocmlir-opt --object ./bin/rocmlir-driver \
-                                              --object ./bin/rocmlir-gen --instr-profile ./coverage.profdata           \
-                                              --ignore-filename-regex=external/llvm-project --format=lcov              \
-                                              --compilation-dir ${WORKSPACE} > ./coverage_${CPATH}.lcov
-                                           ${LLVM_COV} show --object ./bin/rocmlir-opt --object ./bin/rocmlir-driver  \
-                                              --object ./bin/rocmlir-gen --instr-profile ./coverage.profdata          \
-                                              --ignore-filename-regex=external/llvm-project -Xdemangler=llvm-cxxfilt  \
-                                              --format=html > ./coverage_${CPATH}.html
-                                           """
-                                        // Upload to codecov.
-                                        withCredentials([string(credentialsId: 'codecov-token-rocmlir', variable: 'CODECOV_TOKEN')]) {
-                                            sh '''
-                                               curl -Os https://uploader.codecov.io/latest/linux/codecov && chmod +x ./codecov
-                                               proxy_opt=""
-                                               if [ -n "${http_proxy}" ]; then
-                                                   proxy_opt="-U ${http_proxy}"
-                                               fi
-                                               ./codecov -t ${CODECOV_TOKEN} --flags "${CPATH}" -f ./coverage_${CPATH}.lcov ${proxy_opt}
-                                               '''
+                            script {
+                                try {
+                                    timeout(time: 60, activity: true, unit: 'MINUTES') {
+                                        sh 'rm -f build/CMakeCache.txt'
+                                        sh 'rm -f build/*.profraw'
+                                        buildProject('check-rocmlir-build-only',
+                                                     '-DBUILD_FAT_LIBROCKCOMPILER=ON -DCMAKE_BUILD_TYPE=debug -DLLVM_BUILD_INSTRUMENTED_COVERAGE=ON')
+                                        dir ('build') {
+                                            // Run tests.
+                                            collectCoverageData("${LLVM_PROFDATA}", "${LLVM_COV}", "${CPATH}")
+                                            // Upload to codecov.
+                                            withCredentials([string(credentialsId: 'codecov-token-rocmlir',
+                                                                    variable: 'CODECOV_TOKEN')]) {
+                                                sh '''
+                                                   curl -Os https://uploader.codecov.io/latest/linux/codecov && chmod +x ./codecov
+                                                   proxy_opt=""
+                                                   if [ -n "${http_proxy}" ]; then
+                                                       proxy_opt="-U ${http_proxy}"
+                                                   fi
+                                                   ./codecov -t ${CODECOV_TOKEN} --flags "${CPATH}" -f ./coverage_${CPATH}.lcov ${proxy_opt}
+                                                   '''
+                                            }
                                         }
+                                        archiveArtifacts artifacts: 'build/coverage*.report, build/coverage*.lcov, build/coverage*.html', onlyIfSuccessful: true
                                     }
-                                    archiveArtifacts artifacts: 'build/coverage*.report, build/coverage*.lcov, build/coverage*.html', onlyIfSuccessful: true
+                                } catch (Exception e) {
+                                    echo "NOTE: Code coverage stage had an error or timeout:\n${e}"
                                 }
                             }
                         }
