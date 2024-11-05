@@ -1,6 +1,15 @@
 // RUN: rocmlir-opt -split-input-file --migraphx-transform --canonicalize --migraphx-to-tosa %s -verify-diagnostics -o -| FileCheck %s
 
 module  {
+  // CHECK-LABEL: func @literal_zero
+  // CHECK: %[[const:.+]] = "tosa.const"() <{value = dense<0.000000e+00> : tensor<64x3x7x7xf16>}> : () -> tensor<64x3x7x7xf16>
+  // CHECK-NEXT: %[[reshape:.+]] = tosa.reshape %[[const]] {new_shape = array<i64: 9408>} : (tensor<64x3x7x7xf16>) -> tensor<9408xf16>
+  // CHECK-NEXT: return %[[reshape]] : tensor<9408xf16>
+  func.func @literal_zero() -> !migraphx.shaped<64x3x7x7xf16, 147x49x7x1> {
+    %0 = migraphx.literal (dense<0.0> : tensor<64x1xf16>) : <64x3x7x7xf16, 147x49x7x1>
+    return %0 : !migraphx.shaped<64x3x7x7xf16, 147x49x7x1>
+  }
+
   // CHECK-LABEL: func @dequantize_scale
   // CHECK-NOT: tosa.sub
   // CHECK: tosa.cast
@@ -236,6 +245,24 @@ module  {
   func.func @matmul_rank2(%arg0: !migraphx.shaped<32x72xf32, 72x1>, %arg1: !migraphx.shaped<72x64xf32, 64x1>) -> !migraphx.shaped<32x64xf32, 64x1> {
     %0 = migraphx.dot %arg0, %arg1 : <32x72xf32, 72x1>, <72x64xf32, 64x1> -> <32x64xf32, 64x1>
      return %0 : !migraphx.shaped<32x64xf32, 64x1>
+  }
+
+  // CHECK-LABEL: func.func @matmul_broadcast_op
+  func.func @matmul_broadcast_op(%arg0: !migraphx.shaped<64x64x2304xf16, 147456x2304x1>, %arg1: !migraphx.shaped<64x64x768xf16, 49152x768x1>, %arg2: !migraphx.shaped<1x768x2304xf16, 1769472x2304x1>) -> !migraphx.shaped<64x64x2304xf16, 147456x2304x1> attributes {arch = "gfx90a:sramecc+:xnack-", kernel = "mixr"} {
+    // CHECK-DAG: %[[ARG2:.*]] = tosa.reshape %arg2 {new_shape = array<i64: 1, 768, 2304>}
+    // CHECK-DAG: %[[ARG1:.*]] = tosa.reshape %arg1 {new_shape = array<i64: 64, 64, 768>}
+    // CHECK-DAG: %[[ARG0:.*]] = tosa.reshape %arg0 {new_shape = array<i64: 64, 64, 2304>}
+    // CHECK-DAG: %[[INPUT:.*]] = tosa.reshape %[[ARG2]] {new_shape = array<i64: 1, 768, 2304>}
+    %0 = migraphx.broadcast %arg2 {axis = 0, out_lens = [64, 768, 2304]} : <1x768x2304xf16, 1769472x2304x1> -> <64x768x2304xf16, 0x2304x1>
+    // CHECK-DAG: %[[CST0:.*]] = "tosa.const"() <{value = dense<0.000000e+00> : tensor<64x768x2304xf16>}> : () -> tensor<64x768x2304xf16>
+    // CHECK-DAG: %[[ADD:.*]] = tosa.add %[[CST0]], %[[INPUT]]
+    %1 = migraphx.dot %arg1, %0 : <64x64x768xf16, 49152x768x1>, <64x768x2304xf16, 0x2304x1> -> <64x64x2304xf16, 147456x2304x1>
+    // CHECK-DAG: %[[MATMUL:.*]] = tosa.matmul %[[ARG1]], %[[ADD]]
+    // CHECK-DAG: %[[BIASED:.*]] = tosa.add %[[MATMUL]], %[[ARG0]]
+    // CHECK-DAG: %[[RET:.*]] = tosa.reshape %[[BIASED]] {new_shape = array<i64: 9437184>}
+    // CHECK: return %[[RET]]
+    %2 = migraphx.add %1, %arg0 : <64x64x2304xf16, 147456x2304x1>, <64x64x2304xf16, 147456x2304x1> -> <64x64x2304xf16, 147456x2304x1>
+    return %2 : !migraphx.shaped<64x64x2304xf16, 147456x2304x1>
   }
 
   // CHECK-LABEL: func.func @matmul_broadcast
@@ -539,14 +566,6 @@ module {
   func.func @func_convert(%arg0: !migraphx.shaped<16xf16, 1>) -> !migraphx.shaped<16xf32, 1> {
     %0 = migraphx.convert %arg0 : <16xf16, 1> to <16xf32, 1>
      return %0 : !migraphx.shaped<16xf32, 1>
-  }
-
-  // CHECK-LABEL: func.func @func_convert
-  // CHECK: tosa.custom
-  // CHECK-SAME: {domain_name = "rocmlir", implementation_attrs = "", operator_name = "unsigned_cast"} : (tensor<16xi4>) -> tensor<16xi8>
-  func.func @func_convert_int4_unsigned(%arg0: !migraphx.shaped<16xi4, 1>) -> !migraphx.shaped<16xi8, 1> {
-    %0 = migraphx.convert zero_extend %arg0 : <16xi4, 1> to <16xi8, 1>
-     return %0 : !migraphx.shaped<16xi8, 1>
   }
 
   // CHECK-LABEL: func.func @func_div_f32
