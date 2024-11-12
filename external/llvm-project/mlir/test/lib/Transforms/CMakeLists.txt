@@ -1,4 +1,4 @@
-set(LLVM_OPTIONAL_SOURCES 
+set(LLVM_OPTIONAL_SOURCES
   TestDialectConversion.cpp)
 set(MLIRTestTransformsPDLDep)
 set(MLIRTestTransformsPDLSrc)
@@ -25,6 +25,7 @@ add_mlir_library(MLIRTestTransforms
   TestControlFlowSink.cpp
   TestInlining.cpp
   TestMakeIsolatedFromAbove.cpp
+  TestOutlining.cpp
   ${MLIRTestTransformsPDLSrc}
 
   EXCLUDE_FROM_LIBMLIR

@@ -134,6 +134,7 @@ void registerTestNVGPULowerings();
 void registerTestOneToNTypeConversionPass();
 void registerTestOpaqueLoc();
 void registerTestOpLoweringPasses();
+void registerTestOutliner();
 void registerTestPadFusion();
 void registerTestRecursiveTypesPass();
 void registerTestSCFUpliftWhileToFor();
@@ -271,6 +272,7 @@ void registerTestPasses() {
   mlir::test::registerTestOneToNTypeConversionPass();
   mlir::test::registerTestOpaqueLoc();
   mlir::test::registerTestOpLoweringPasses();
+  mlir::test::registerTestOutliner();
   mlir::test::registerTestPadFusion();
   mlir::test::registerTestRecursiveTypesPass();
   mlir::test::registerTestSCFUpliftWhileToFor();

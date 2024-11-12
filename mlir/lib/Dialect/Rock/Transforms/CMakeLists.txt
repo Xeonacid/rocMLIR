@@ -42,6 +42,7 @@ add_rocmlir_dialect_library(MLIRRockTransforms
   MLIRArithTransforms
   MLIRBufferizationDialect
   MLIRBufferizationTransforms
+  MLIRCopyOpInterface
   MLIRDialect
   MLIRFuncDialect
   MLIRIR
