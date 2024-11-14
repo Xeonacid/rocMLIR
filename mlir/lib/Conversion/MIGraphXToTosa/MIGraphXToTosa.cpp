@@ -997,9 +997,7 @@ LogicalResult QuantizeLinearConverter::matchAndRewrite(
                           op.getBias().getType().getElementType());
     }
   }
-  Value asShort =
-      createCastOp(rewriter, loc, biasType, scaled,
-                   op.getScale().getType().getElementType(), origOutputType);
+  Value asShort = createCastOp(rewriter, loc, biasType, scaled, elementType);
   Value biased = asShort;
   if (bias)
     biased =
@@ -1040,12 +1038,35 @@ LogicalResult QuantizeLinearConverter::matchAndRewrite(
 
     FloatAttr minFatt = rewriter.getFloatAttr(rewriter.getF32Type(), minF);
     FloatAttr maxFatt = rewriter.getFloatAttr(rewriter.getF32Type(), maxF);
-    result = createOpAndInfer<tosa::ClampOp>(
-        rewriter, loc, biasType, result, minI.getSExtValue(),
-        maxI.getSExtValue(), minFatt, maxFatt);
-    result =
-        createCastOp(rewriter, loc, outputType, result,
-                     op.getBias().getType().getElementType(), origOutputType);
+    if (origOutputType.isUnsignedInteger()) {
+      assert(isa<IntegerType>(biasType));
+      int32_t min = minI.getZExtValue();
+      int32_t max = maxI.getZExtValue();
+      mlir::IntegerAttr minAttr = rewriter.getI32IntegerAttr(min);
+      mlir::IntegerAttr maxAttr = rewriter.getI32IntegerAttr(max);
+
+      mlir::DenseElementsAttr minDenseAttr = mlir::DenseElementsAttr::get(
+          cast<RankedTensorType>(result.getType()), minAttr);
+      mlir::Value minValue = rewriter.create<mlir::arith::ConstantOp>(
+          loc, result.getType(), minDenseAttr);
+      mlir::DenseElementsAttr maxDenseAttr = mlir::DenseElementsAttr::get(
+          cast<RankedTensorType>(result.getType()), maxAttr);
+      mlir::Value maxValue = rewriter.create<mlir::arith::ConstantOp>(
+          loc, result.getType(), maxDenseAttr);
+
+      mlir::SmallVector<mlir::Value, 3> inputs = {result, minValue, maxValue};
+      result =
+          rewriter
+              .create<tosa::CustomOp>(loc, result.getType(), "unsigned_clamp",
+                                      "rocmlir", "", inputs)
+              ->getResult(0);
+    } else {
+      result = createOpAndInfer<tosa::ClampOp>(
+          rewriter, loc, biasType, result, minI.getSExtValue(),
+          maxI.getSExtValue(), minFatt, maxFatt);
+    }
+    result = createCastOp(rewriter, loc, outputType, result, biasType,
+                          origOutputType);
   }
   rewriter.replaceOp(op, result);
 
@@ -1162,25 +1183,65 @@ LiteralConverter::matchAndRewrite(migraphx::LiteralOp op, OpAdaptor adaptor,
     return failure();
 
   ElementsAttr value = op.getValue();
-  if (value.isSplat() && value.getType() != newType) {
-    // Get the original splat value (for example SI8 value)
-    Attribute splatValue = value.getSplatValue<Attribute>();
+  if (value.getType() != newType) {
+    if (value.isSplat()) {
+      // Get the original splat value (for example SI8 value)
+      Attribute splatValue = value.getSplatValue<Attribute>();
 
-    // Reinterpret the splatValue under the new type (for example SI8 -> I8),
-    // preserving bytes
-    Attribute newSplatValue;
-    if (auto intAttr = dyn_cast<IntegerAttr>(splatValue))
-      newSplatValue =
-          IntegerAttr::get(newType.getElementType(), intAttr.getValue());
-    else if (auto floatAttr = dyn_cast<FloatAttr>(splatValue))
-      newSplatValue =
-          FloatAttr::get(newType.getElementType(), floatAttr.getValue());
-    else
-      return failure();
+      // Reinterpret the splatValue under the new type (for example SI8 -> I8),
+      // preserving bytes
+      Attribute newSplatValue;
+      if (auto intAttr = dyn_cast<IntegerAttr>(splatValue))
+        newSplatValue =
+            IntegerAttr::get(newType.getElementType(), intAttr.getValue());
+      else if (auto floatAttr = dyn_cast<FloatAttr>(splatValue))
+        newSplatValue =
+            FloatAttr::get(newType.getElementType(), floatAttr.getValue());
+      else
+        return failure();
 
-    // Create the new SplatElementsAttr (for example I8 type) with preserved
-    // value bytes
-    value = SplatElementsAttr::get(newType, newSplatValue);
+      // Create the new SplatElementsAttr (for example I8 type) with preserved
+      // value bytes
+      value = SplatElementsAttr::get(newType, newSplatValue);
+    } else {
+      // Get the element type of the original attribute
+      mlir::Type originalElementType =
+          cast<RankedTensorType>(value.getType()).getElementType();
+
+      // Get the new element type you want to convert to
+      mlir::Type newElementType = newType.getElementType();
+
+      // Check the original element type and create a new attribute with the
+      // desired type
+      if (auto originalIntAttr = dyn_cast<mlir::DenseIntElementsAttr>(value)) {
+        // Convert DenseIntElementsAttr to the new element type
+        SmallVector<APInt> newValues;
+        for (const APInt &oldValue : originalIntAttr.getValues<APInt>()) {
+          if (originalElementType.isSignedInteger())
+            newValues.push_back(
+                oldValue.sextOrTrunc(newElementType.getIntOrFloatBitWidth()));
+          else
+            newValues.push_back(
+                oldValue.zextOrTrunc(newElementType.getIntOrFloatBitWidth()));
+        }
+        value = mlir::DenseIntElementsAttr::get(newType, newValues);
+      } else if (auto originalFloatAttr =
+                     dyn_cast<mlir::DenseFPElementsAttr>(value)) {
+        // TODO: fix this
+        // Convert DenseFloatElementsAttr to the new element type
+        // SmallVector<APFloat> newValues;
+        // for (const APFloat& oldValue :
+        // originalFloatAttr.getValues<APFloat>()) {
+        //   newValues.push_back(APFloat(newElementType.cast<FloatType>(),
+        //   oldValue));
+        // }
+        // value = mlir::DenseFloatElementsAttr::get(newType, newValues);
+      } else {
+        // Handle other types of ElementsAttr, such as SparseElementsAttr or
+        // OpaqueElementsAttr
+        return failure();
+      }
+    }
   }
 
   // Replace with the new operation using the updated tensor type
