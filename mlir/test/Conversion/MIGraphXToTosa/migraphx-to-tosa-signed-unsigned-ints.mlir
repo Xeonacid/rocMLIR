@@ -99,7 +99,7 @@ func.func @dequantize_scale_bias_si32(%arg: !migraphx.shaped<1x112x112x64xsi32, 
 // CHECK-LABEL: func @quantize_scale_bias_ui32
 // CHECK: tosa.reciprocal
 // CHECK: tosa.mul
-// CHECK: tosa.custom{{.*}}f32{{.*}}i32
+// CHECK: tosa.cast{{.*}}: (tensor<1x112x112x64xf32>) -> tensor<1x112x112x64xi32>
 // CHECK: tosa.add
 func.func @quantize_scale_bias_ui32(%arg: !migraphx.shaped<1x112x112x64xf32, 802816x7168x64x1>, %scale: !migraphx.shaped<64xf32, 1>, %bias: !migraphx.shaped<64xui32, 1>) -> !migraphx.shaped<1x112x112x64xui32, 802816x7168x64x1> attributes {kernel = "mixr"} {
   %1 = migraphx.quantizelinear %arg, %scale, %bias : <1x112x112x64xf32, 802816x7168x64x1>, <64xf32, 1>, !migraphx.shaped<64xui32, 1> -> <1x112x112x64xui32, 802816x7168x64x1>
@@ -120,9 +120,9 @@ func.func @quantize_scale_bias_si32(%arg: !migraphx.shaped<1x112x112x64xf32, 802
 // CHECK: tosa.reciprocal
 // CHECK: tosa.mul
 // CHECK: tosa.custom{{.*}}i8{{.*}}i32
-// CHECK: tosa.custom{{.*}}f32{{.*}}i32
+// CHECK: tosa.cast{{.*}}: (tensor<1x112x112x64xf32>) -> tensor<1x112x112x64xi32>
 // CHECK: tosa.add
-// CHECK: tosa.clamp{{.*}}i32{{.*}}i32
+// CHECK: tosa.custom{{.*}}{domain_name = "rocmlir", implementation_attrs = "", operator_name = "unsigned_clamp"}
 // CHECK: tosa.custom{{.*}}i32{{.*}}i8
 func.func @quantize_scale_bias_ui8(%arg: !migraphx.shaped<1x112x112x64xf32, 802816x7168x64x1>, %scale: !migraphx.shaped<64xf32, 1>, %bias: !migraphx.shaped<64xui8, 1>) -> !migraphx.shaped<1x112x112x64xui8, 802816x7168x64x1> attributes {kernel = "mixr"} {
   %1 = migraphx.quantizelinear %arg, %scale, %bias : <1x112x112x64xf32, 802816x7168x64x1>, <64xf32, 1>, !migraphx.shaped<64xui8, 1> -> <1x112x112x64xui8, 802816x7168x64x1>
